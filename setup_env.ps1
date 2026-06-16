@@ -1,21 +1,21 @@
-# setup_env.ps1 — Create conda env and install all dependencies for AITranslate
+# setup_env.ps1 — Create conda env inside project folder and install deps
 $ErrorActionPreference = "Stop"
 
+$prefix = "$PSScriptRoot\.conda"
 $envName = "aitranslate"
 
-$existing = conda env list | Select-String "^\s*$envName\s"
-if ($existing) {
-    Write-Host "Conda env '$envName' already exists. Removing..."
-    conda env remove -n $envName -y
+if (Test-Path $prefix) {
+    Write-Host "Removing existing env at $prefix..."
+    conda env remove --prefix $prefix -y
 }
 
-Write-Host "Creating conda env '$envName' with Python 3.11..."
-conda create -n $envName python=3.11 -y
+Write-Host "Creating conda env at $prefix (Python 3.10)..."
+conda create --prefix $prefix python=3.10 pyqt qtbase pillow -y
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-Write-Host "Activating and installing packages..."
-conda run -n $envName pip install PyQt6 Pillow easyocr deep-translator pywin32 pynput
+Write-Host "Installing remaining packages via pip..."
+conda run --prefix $prefix pip install easyocr deep-translator pywin32 pynput cleantext
 
 Write-Host ""
-Write-Host "Done. Activate with: conda activate $envName"
+Write-Host "Done. Activate with: conda activate $prefix"
 Write-Host "Then run: python main.py"

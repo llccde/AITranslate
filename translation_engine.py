@@ -16,15 +16,32 @@ from translation_task import TranslationTask
 from deepseek_translator import DeepSeekTranslator
 from utils import clean_text, is_target_language
 
-_easyocr_reader = None
+_easyocr_readers: list = []
 
 
-def _get_reader():
-    global _easyocr_reader
-    if _easyocr_reader is None:
+def reset_readers() -> None:
+    global _easyocr_readers
+    _easyocr_readers = []
+
+
+def _get_readers() -> list:
+    global _easyocr_readers
+    if not _easyocr_readers:
         import easyocr
-        _easyocr_reader = easyocr.Reader(OCR_LANG, gpu=False)
-    return _easyocr_reader
+        groups = _group_languages(OCR_LANG)
+        _easyocr_readers = [easyocr.Reader(group, gpu=False) for group in groups]
+    return _easyocr_readers
+
+
+def _group_languages(lang_list: list[str]) -> list[list[str]]:
+    non_en = sorted(set(l for l in lang_list if l != 'en'))
+    if not non_en:
+        return [['en']]
+    groups = []
+    for lang in non_en:
+        group = ['en', lang] if 'en' in lang_list else [lang]
+        groups.append(group)
+    return groups
 
 
 def _lang_display(code: str) -> str:
@@ -269,9 +286,11 @@ class TranslationEngine(QObject):
 
             import numpy as np
             img_np = np.array(img_rgb)
-            reader = _get_reader()
-            results = reader.readtext(img_np)
-            lines = self._extract_lines_from_easyocr(results)
+            readers = _get_readers()
+            all_results: list = []
+            for reader in readers:
+                all_results.extend(reader.readtext(img_np))
+            lines = self._extract_lines_from_easyocr(all_results)
             if not lines:
                 if generation == self._generation:
                     self.translation_ready.emit("")

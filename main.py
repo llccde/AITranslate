@@ -3,24 +3,24 @@ import time
 import traceback
 from typing import Any, Optional
 
-import PyQt6
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QTextEdit, QPushButton, QTabWidget, QComboBox, QSlider,
-    QLineEdit, QGroupBox, QSplitter,
+    QLineEdit, QGroupBox, QSplitter, QCheckBox,
 )
 from PyQt6.QtCore import Qt, QTimer, QEvent
 from PyQt6.QtGui import QPixmap, QCloseEvent, QTextCursor
 
 from config import (
     INTERVAL, API_PARALLEL_LIMIT, FOCUS_GUARD_ENABLED,
-    DEEPSEEK_API_KEY, TRANSLATE_ENGINE, save_settings,
+    DEEPSEEK_API_KEY, TRANSLATE_ENGINE, OCR_LANG, AVAILABLE_OCR_LANGS,
+    save_settings,
 )
 from utils import is_window_foreground
 from capture import set_window_display_affinity
 from cache_tab import CacheTab
 from overlay import TranslationOverlayManager
-from translation_engine import TranslationEngine
+from translation_engine import TranslationEngine, reset_readers
 from window_manager import WindowManager
 from overlay_controller import OverlayController
 from hotkey_controller import HotkeyController
@@ -81,6 +81,8 @@ class WindowTranslator(QWidget):
     api_label: QLabel
     focus_guard_btn: QPushButton
     engine_combo: QComboBox
+    ocr_lang_group: QGroupBox
+    ocr_lang_checkboxes: dict[str, Any]
     deepseek_group: QGroupBox
     api_key_input: QLineEdit
     api_key_toggle_btn: QPushButton
@@ -311,6 +313,20 @@ class WindowTranslator(QWidget):
         engine_row.addStretch()
         sl.addLayout(engine_row)
 
+        self.ocr_lang_group = QGroupBox("OCR 识别语言")
+        ocr_lang_layout = QVBoxLayout(self.ocr_lang_group)
+        ocr_lang_row = QHBoxLayout()
+        self.ocr_lang_checkboxes = {}
+        for code, name in AVAILABLE_OCR_LANGS.items():
+            cb = QCheckBox(name)
+            cb.setChecked(code in OCR_LANG)
+            cb.setToolTip(f"启用 {name} 文字识别")
+            self.ocr_lang_checkboxes[code] = cb
+            ocr_lang_row.addWidget(cb)
+        ocr_lang_row.addStretch()
+        ocr_lang_layout.addLayout(ocr_lang_row)
+        sl.addWidget(self.ocr_lang_group)
+
         self.deepseek_group = QGroupBox("DeepSeek API 设置")
         ds_layout = QVBoxLayout(self.deepseek_group)
         key_row = QHBoxLayout()
@@ -354,6 +370,9 @@ class WindowTranslator(QWidget):
         self.cache_tab.force_translate_requested.connect(self._on_force_translate)
         self.engine_combo.currentIndexChanged.connect(self._on_engine_changed)
         self.api_key_input.textChanged.connect(self._on_api_key_changed)
+
+        for code, cb in self.ocr_lang_checkboxes.items():
+            cb.toggled.connect(lambda checked, c=code: self._on_ocr_lang_changed(c, checked))
 
         # -- window manager --
         self.window_manager.window_selected.connect(self._on_window_selected)
@@ -683,6 +702,24 @@ class WindowTranslator(QWidget):
             QLineEdit.EchoMode.Normal if show else QLineEdit.EchoMode.Password
         )
         self.api_key_toggle_btn.setText("隐藏" if show else "显示")
+
+    def _on_ocr_lang_changed(self, code: str, checked: bool) -> None:
+        import config
+        if checked:
+            if code not in config.OCR_LANG:
+                config.OCR_LANG.append(code)
+        else:
+            if code in config.OCR_LANG and len(config.OCR_LANG) > 1:
+                config.OCR_LANG.remove(code)
+            else:
+                cb = self.ocr_lang_checkboxes.get(code)
+                if cb is not None:
+                    cb.blockSignals(True)
+                    cb.setChecked(True)
+                    cb.blockSignals(False)
+                return
+        reset_readers()
+        self._save_settings()
 
     def _save_settings(self) -> None:
         import config
