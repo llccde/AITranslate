@@ -23,12 +23,8 @@ def get_true_window_rect(hwnd: int) -> Tuple[int, int, int, int]:
 
 def clean_text(text: str) -> str:
     return clean(text,
-        fix_unicode=False,
-        to_ascii=False,
-        lower=False,
-        no_line_breaks=False,
-        no_punct=False,
-        lang=None # type: ignore
+        clean_all=False,
+        extra_spaces=True,
     )
 
 
