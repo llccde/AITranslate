@@ -1,0 +1,7 @@
+PyQt6>=6.5.0
+Pillow>=10.0.0
+pytesseract>=0.3.10
+deep-translator>=1.11.0
+pywin32>=306
+pynput>=1.7.0
+cleantext>=1.1.0
