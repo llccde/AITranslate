@@ -29,8 +29,8 @@ python main.py
 ## Key gotchas
 
 - **Windows-only** — depends on `win32gui`, `win32con`, `pynput`, `ctypes.windll.dwmapi`
-- **System requirement**: [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki) must be installed (set path in `config.py` if not in `PATH`)
-- **No requirements.txt** — deps: `PyQt6`, `Pillow`, `pytesseract`, `deep-translator`, `pywin32`, `pynput`
+- **EasyOCR** auto-downloads models on first run; requires `numpy` (installed as easyocr dependency)
+- **No requirements.txt** — deps: `PyQt6`, `Pillow`, `easyocr`, `deep-translator`, `pywin32`, `pynput`
 - **No tests, no linter, no formatter config**
 - **Run as admin** for region selection overlay to work on some windows
 - **Threading**: OCR+translate runs in daemon threads; results cross thread boundary via PyQt signals (`ocr_text_signal`, `translation_ready`, `screenshot_preview`)

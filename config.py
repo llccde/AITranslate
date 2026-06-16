@@ -3,7 +3,7 @@ import os
 
 from deep_translator import GoogleTranslator
 
-OCR_LANG: str = 'eng+chi_sim+jpn'
+OCR_LANG: list[str] = ['en', 'ch_sim', 'ja']
 TARGET_LANG: str = 'zh-CN'
 INTERVAL: float = 2.0
 API_PARALLEL_LIMIT: int = 5

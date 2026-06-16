@@ -3,7 +3,6 @@ import traceback
 from typing import Any, Callable, Optional, cast
 
 from PIL.ImageQt import ImageQt
-import pytesseract
 from PyQt6.QtCore import QObject, pyqtSignal, QRect
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtCore import Qt
@@ -16,6 +15,16 @@ from capture import ScreenCapture
 from translation_task import TranslationTask
 from deepseek_translator import DeepSeekTranslator
 from utils import clean_text, is_target_language
+
+_easyocr_reader = None
+
+
+def _get_reader():
+    global _easyocr_reader
+    if _easyocr_reader is None:
+        import easyocr
+        _easyocr_reader = easyocr.Reader(OCR_LANG, gpu=False)
+    return _easyocr_reader
 
 
 def _lang_display(code: str) -> str:
@@ -36,8 +45,7 @@ def _lang_display(code: str) -> str:
 
 def _source_lang_display() -> str:
     """Derive a human-readable source language name from OCR_LANG."""
-    langs = [l.strip() for l in OCR_LANG.split('+') if l.strip()]
-    names = [_lang_display(l) for l in langs]
+    names = [_lang_display(l) for l in OCR_LANG]
     seen: set[str] = set()
     unique: list[str] = []
     for n in names:
@@ -259,10 +267,11 @@ class TranslationEngine(QObject):
             )
             self.screenshot_preview.emit(scaled)
 
-            data = pytesseract.image_to_data(
-                img, lang=OCR_LANG, output_type=pytesseract.Output.DICT,
-            )
-            lines = self._extract_lines_from_data(data)
+            import numpy as np
+            img_np = np.array(img_rgb)
+            reader = _get_reader()
+            results = reader.readtext(img_np)
+            lines = self._extract_lines_from_easyocr(results)
             if not lines:
                 if generation == self._generation:
                     self.translation_ready.emit("")
@@ -371,36 +380,60 @@ class TranslationEngine(QObject):
                 self._execute(force=False)
 
     @staticmethod
-    def _extract_lines_from_data(data: dict[str, Any]) -> list[dict[str, Any]]:
-        lines: dict[tuple, dict] = {}
-        for i in range(len(data['text'])):
-            text = data['text'][i].strip()
-            if not text or int(data['conf'][i]) < 0:
+    def _extract_lines_from_easyocr(results: list) -> list[dict[str, Any]]:
+        regions: list[tuple] = []
+        for bbox, text, conf in results:
+            text = text.strip()
+            if not text or conf < 0.3:
                 continue
-            key = (data['block_num'][i], data['par_num'][i], data['line_num'][i])
-            left = data['left'][i]
-            right = left + data['width'][i]
-            top = data['top'][i]
-            bottom = top + data['height'][i]
-            if key not in lines:
-                lines[key] = {'words': []}
-            lines[key]['words'].append((text, left, right, top, bottom))
+            xs = [p[0] for p in bbox]
+            ys = [p[1] for p in bbox]
+            left = min(xs)
+            right = max(xs)
+            top = min(ys)
+            bottom = max(ys)
+            regions.append((text, left, right, top, bottom))
+
+        if not regions:
+            return []
+
+        regions.sort(key=lambda r: (r[3], r[1]))
+
+        line_groups: list[list[tuple]] = []
+        current_line = [regions[0]]
+        current_top = regions[0][3]
+        current_bottom = regions[0][4]
+
+        for r in regions[1:]:
+            text, left, right, top, bottom = r
+            line_h = current_bottom - current_top
+            threshold = line_h * 0.5 if line_h > 0 else 5
+            if top < current_bottom - threshold and bottom > current_top + threshold:
+                current_line.append(r)
+                current_top = min(current_top, top)
+                current_bottom = max(current_bottom, bottom)
+            else:
+                line_groups.append(current_line)
+                current_line = [r]
+                current_top = top
+                current_bottom = bottom
+        line_groups.append(current_line)
 
         result: list[dict[str, Any]] = []
-        for key in sorted(lines.keys()):
-            words = sorted(lines[key]['words'], key=lambda w: w[1])
-            if not words:
+        for line_regions in line_groups:
+            line_regions.sort(key=lambda r: r[1])
+            if not line_regions:
                 continue
 
             segments: list[tuple] = []
-            seg_texts: list[str] = [words[0][0]]
-            seg_left = words[0][1]
-            seg_top = words[0][3]
-            seg_right = words[0][2]
-            seg_bottom = words[0][4]
+            seg_texts: list[str] = [line_regions[0][0]]
+            seg_left = line_regions[0][1]
+            seg_top = line_regions[0][3]
+            seg_right = line_regions[0][2]
+            seg_bottom = line_regions[0][4]
 
-            for w in words[1:]:
-                text, left, right, top, bottom = w
+            for r in line_regions[1:]:
+                text, left, right, top, bottom = r
                 gap = left - seg_right
                 line_h = seg_bottom - seg_top
                 if gap > line_h * 1.5:
