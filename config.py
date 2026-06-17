@@ -10,6 +10,8 @@ API_PARALLEL_LIMIT: int = 5
 FOCUS_GUARD_ENABLED: bool = True
 
 DEEPSEEK_API_KEY: str = ""
+DEEPSEEK_BASE_URL: str = "https://api.deepseek.com/v1"
+DEEPSEEK_THINKING: bool = False
 TRANSLATE_ENGINE: str = "google"
 
 SETTINGS_PATH: str = os.path.join(os.path.dirname(__file__), "settings.csv")
@@ -25,13 +27,9 @@ AVAILABLE_OCR_LANGS: dict[str, str] = {
 translator: GoogleTranslator = GoogleTranslator(source='auto', target=TARGET_LANG)
 
 
-def get_translation_config() -> str:
-    engine_name = "GoogleTranslator" if TRANSLATE_ENGINE == "google" else "deepseek"
-    return f"{engine_name}|auto|{TARGET_LANG}"
-
 
 def load_settings() -> None:
-    global DEEPSEEK_API_KEY, TRANSLATE_ENGINE, OCR_LANG
+    global DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_THINKING, TRANSLATE_ENGINE, OCR_LANG
     if not os.path.exists(SETTINGS_PATH):
         return
     try:
@@ -43,6 +41,10 @@ def load_settings() -> None:
                 key = row[0].strip()
                 if key == "deepseek_api_key":
                     DEEPSEEK_API_KEY = row[1].strip()
+                elif key == "deepseek_base_url":
+                    DEEPSEEK_BASE_URL = row[1].strip()
+                elif key == "deepseek_thinking":
+                    DEEPSEEK_THINKING = row[1].strip().lower() == "true"
                 elif key == "translate_engine":
                     TRANSLATE_ENGINE = row[1].strip()
                 elif key == "ocr_lang":
@@ -56,6 +58,8 @@ def save_settings() -> None:
         with open(SETTINGS_PATH, "w", encoding="utf-8", newline='') as f:
             writer = csv.writer(f)
             writer.writerow(["deepseek_api_key", DEEPSEEK_API_KEY])
+            writer.writerow(["deepseek_base_url", DEEPSEEK_BASE_URL])
+            writer.writerow(["deepseek_thinking", str(DEEPSEEK_THINKING)])
             writer.writerow(["translate_engine", TRANSLATE_ENGINE])
             writer.writerow(["ocr_lang"] + OCR_LANG)
     except Exception:

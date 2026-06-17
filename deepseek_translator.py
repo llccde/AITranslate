@@ -242,7 +242,8 @@ class DeepSeekTranslator:
                          on_line: Optional[Callable[[int, str], None]] = None,
                          on_cancelled: Optional[Callable[[], bool]] = None,
                          on_prompt: Optional[Callable[[str], None]] = None,
-                         on_stream: Optional[Callable[[str], None]] = None) -> Optional[dict[int, str]]:
+                         on_stream: Optional[Callable[[str], None]] = None,
+                         on_usage: Optional[Callable[[int, int], None]] = None) -> Optional[dict[int, str]]:
         """
         Translate a batch of texts using DeepSeek streaming API.
 
@@ -254,6 +255,7 @@ class DeepSeekTranslator:
             on_cancelled: Callback() -> bool
             on_prompt: Callback(prompt_text) with full conversation prompt
             on_stream: Callback(chunk_text) with each streaming delta chunk
+            on_usage: Callback(prompt_tokens, completion_tokens) when usage data arrives
 
         Returns:
             dict mapping idx -> translated_text, or None if cancelled
@@ -326,6 +328,10 @@ class DeepSeekTranslator:
                     except json.JSONDecodeError:
                         continue
                     choices = event.get('choices', [])
+                    usage = event.get('usage')
+                    if usage and on_usage:
+                        on_usage(usage.get('prompt_tokens', 0),
+                                 usage.get('completion_tokens', 0))
                     if not choices:
                         continue
                     delta = choices[0].get('delta', {})

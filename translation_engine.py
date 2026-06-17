@@ -7,7 +7,6 @@ from PyQt6.QtCore import QObject, pyqtSignal, QRect
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtCore import Qt
 
-from cache_tab import CacheTab
 from config import OCR_LANG, API_PARALLEL_LIMIT, TARGET_LANG
 import config as app_config
 from deep_translator import GoogleTranslator
@@ -94,8 +93,7 @@ def _translate_via_deepseek(engine: 'TranslationEngine',
                             force: bool,
                             generation: int,
                             _emit_line_done: Callable[[int, str, dict[str, Any]], None],
-                            _progress: Callable[[int, int], None],
-                            _on_cache_entry: Callable[[str, str, bool], None]) -> None:
+                            _progress: Callable[[int, int], None]) -> None:
     total = len(lines)
     uncached_items: list[dict[str, Any]] = []
     completed = 0
@@ -103,13 +101,7 @@ def _translate_via_deepseek(engine: 'TranslationEngine',
     for i, line in enumerate(lines):
         if generation != engine._generation:
             return
-        cached = engine._cache_tab.get_from_cache(line['text'])
-        if cached and not force:
-            init_results[i]['translated'] = cached
-            completed += 1
-            _emit_line_done(i, cached, line)
-            _on_cache_entry(line['text'], cached, True)
-        elif not force and is_target_language(line['text'], TARGET_LANG):
+        if not force and is_target_language(line['text'], TARGET_LANG):
             init_results[i]['translated'] = line['text']
             completed += 1
             _emit_line_done(i, line['text'], line)
@@ -129,7 +121,6 @@ def _translate_via_deepseek(engine: 'TranslationEngine',
         line_info = lines[idx]
         init_results[idx]['translated'] = translated_text
         _emit_line_done(idx, translated_text, line_info)
-        _on_cache_entry(line_info['text'], translated_text, False)
         nonlocal completed
         completed += 1
         _progress(completed, total)
@@ -142,6 +133,10 @@ def _translate_via_deepseek(engine: 'TranslationEngine',
         if generation == engine._generation:
             engine.deepseek_stream.emit(chunk)
 
+    def on_usage(prompt_tokens: int, completion_tokens: int) -> None:
+        if generation == engine._generation:
+            engine.deepseek_usage.emit(prompt_tokens, completion_tokens)
+
     translator.translate_batch(
         items=uncached_items,
         source_lang=_source_lang_display(),
@@ -150,6 +145,7 @@ def _translate_via_deepseek(engine: 'TranslationEngine',
         on_cancelled=lambda: generation != engine._generation,
         on_prompt=on_prompt,
         on_stream=on_stream,
+        on_usage=on_usage,
     )
 
 
@@ -163,17 +159,15 @@ class TranslationEngine(QObject):
     line_translations_ready = pyqtSignal(list)
     line_overlay_text = pyqtSignal(int, str)
     translation_done = pyqtSignal()
-    cache_hit = pyqtSignal()
-    api_call = pyqtSignal()
     screenshot_preview = pyqtSignal(QPixmap)
     ocr_text_signal = pyqtSignal(str)
     deepseek_prompt = pyqtSignal(str)
     deepseek_stream = pyqtSignal(str)
+    deepseek_usage = pyqtSignal(int, int)
 
     IDLE: str = 'idle'
     RUNNING: str = 'running'
 
-    _cache_tab: 'CacheTab'
     _hwnd: Optional[int]
     _region: Optional[QRect]
     _dpr: float
@@ -187,9 +181,8 @@ class TranslationEngine(QObject):
     _last_text: str
     _guard_check: Callable[[], bool]
 
-    def __init__(self, cache_tab: 'CacheTab') -> None:
+    def __init__(self) -> None:
         super().__init__()
-        self._cache_tab = cache_tab
 
         self._hwnd = None
         self._region = None
@@ -347,20 +340,10 @@ class TranslationEngine(QObject):
                 if generation == self._generation:
                     self.translation_progress.emit(c, t)
 
-            def _on_cache_entry(original: str, translated: str,
-                                from_cache: bool) -> None:
-                if generation == self._generation:
-                    self._cache_tab.translation_cache[original] = translated
-                    if from_cache:
-                        self.cache_hit.emit()
-                    else:
-                        self._cache_tab._save_cache_entry(original, translated)
-                        self.api_call.emit()
-
             if app_config.TRANSLATE_ENGINE == 'deepseek':
                 _translate_via_deepseek(
                     self, lines, init_results, force, generation,
-                    _emit_line_done, _progress, _on_cache_entry,
+                    _emit_line_done, _progress,
                 )
                 line_results = [r for r in init_results
                                 if r['translated'] != '…' or r['original']]
@@ -375,8 +358,6 @@ class TranslationEngine(QObject):
                 task = TranslationTask(
                     lines=lines,
                     force=force,
-                    cache_get=self._cache_tab.get_from_cache,
-                    cache_set=self._cache_store,
                     translate_fn=lambda text: (
                         text if is_target_language(text, TARGET_LANG)
                         else GoogleTranslator(
@@ -387,13 +368,10 @@ class TranslationEngine(QObject):
                     on_progress=_progress,
                     on_line_done=_emit_line_done,
                     on_cancelled=lambda: generation != self._generation,
-                    on_cache_entry=_on_cache_entry,
                 )
-                result = task.execute()
-                if result is None or generation != self._generation:
+                line_results = task.execute()
+                if line_results is None or generation != self._generation:
                     return
-
-                line_results, _, _ = result
 
                 full_translated = '\n'.join(
                     r['translated'] or '' for r in line_results
@@ -406,9 +384,6 @@ class TranslationEngine(QObject):
         finally:
             if generation == self._generation:
                 self.translation_done.emit()
-
-    def _cache_store(self, text: str, translated: str) -> None:
-        self._cache_tab.translation_cache[text] = translated
 
     def _on_translation_done(self) -> None:
         """Called on main thread after worker finishes."""

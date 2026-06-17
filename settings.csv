@@ -1,3 +1,5 @@
 deepseek_api_key,sk-95e9b4476b574c67adb558907334f638
+deepseek_base_url,https://api.deepseek.com/v1
+deepseek_thinking,False
 translate_engine,deepseek
 ocr_lang,ch_sim,ja
