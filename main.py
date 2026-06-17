@@ -1,5 +1,6 @@
 import sys
 import time
+import ctypes
 import traceback
 from typing import Any, Optional
 
@@ -55,6 +56,7 @@ class WindowTranslator(QWidget):
     _base_url: str
     _thinking: bool
     _quick_dirty: bool
+    _config_expanded: bool
     _main_hwnd: int
 
     tab_widget: QTabWidget
@@ -70,6 +72,7 @@ class WindowTranslator(QWidget):
     ai_prompt_edit: QTextEdit
     ai_stream_edit: QTextEdit
     ai_usage_label: QLabel
+    collapse_toggle_btn: QPushButton
     quick_settings_frame: QFrame
     engine_quick_combo: QComboBox
     apply_btn: QPushButton
@@ -96,13 +99,12 @@ class WindowTranslator(QWidget):
     engine_combo: QComboBox
     ocr_lang_group: QGroupBox
     ocr_lang_checkboxes: dict[str, Any]
-    deepseek_group: QGroupBox
-    api_key_input: QLineEdit
     api_key_toggle_btn: QPushButton
 
     _auto_timer: QTimer
     _visual_timer: QTimer
     _countdown_timer: QTimer
+    _split_layout: QHBoxLayout
 
     def __init__(self) -> None:
         super().__init__()
@@ -135,6 +137,7 @@ class WindowTranslator(QWidget):
         self._base_url = DEEPSEEK_BASE_URL
         self._thinking = DEEPSEEK_THINKING
         self._quick_dirty = False
+        self._config_expanded = False
 
         # ---- build UI ----
         self._setup_ui()
@@ -176,7 +179,7 @@ class WindowTranslator(QWidget):
         tl.addWidget(self.label)
 
         # ---- 左右分栏 ----
-        split_layout = QHBoxLayout()
+        self._split_layout = QHBoxLayout()
 
         # 左半边
         left_panel = QVBoxLayout()
@@ -184,7 +187,7 @@ class WindowTranslator(QWidget):
         # 框1：窗口操作
         box1 = QFrame()
         box1.setObjectName("leftBox1")
-        box1.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        box1.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         box1.setFrameShape(QFrame.Shape.StyledPanel)
         box1.setStyleSheet("#leftBox1 { border: 1px solid #ccc; border-radius: 8px; }")
         b1_layout = QVBoxLayout(box1)
@@ -212,7 +215,7 @@ class WindowTranslator(QWidget):
         # 框2：状态 + 终止
         box2 = QFrame()
         box2.setObjectName("leftBox2")
-        box2.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        box2.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         box2.setFrameShape(QFrame.Shape.StyledPanel)
         box2.setStyleSheet("#leftBox2 { border: 1px solid #ccc; border-radius: 8px; }")
         b2_layout = QVBoxLayout(box2)
@@ -226,14 +229,28 @@ class WindowTranslator(QWidget):
         abort_row.addWidget(self.abort_btn)
         b2_layout.addLayout(abort_row)
         left_panel.addWidget(box2)
+        left_panel.addStretch()
 
-        split_layout.addLayout(left_panel, 1)
+        self._split_layout.addLayout(left_panel, 1)
 
         # 右半边：快速设置
+        right_wrapper = QVBoxLayout()
+        right_wrapper.setContentsMargins(0, 0, 0, 0)
+        right_wrapper.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        self.collapse_toggle_btn = QPushButton("展开--->")
+        self.collapse_toggle_btn.setStyleSheet(
+            "QPushButton { text-align: left; padding: 1px 6px; "
+            "font-size: 11px; border: 1px solid #ccc; border-radius: 0px; "
+            "background-color: #e8e8e8; color: #888; }"
+        )
+        right_wrapper.addWidget(self.collapse_toggle_btn)
+
         self.quick_settings_frame = QFrame()
         self.quick_settings_frame.setObjectName("quickSettingsFrame")
         self.quick_settings_frame.setFrameShape(QFrame.Shape.StyledPanel)
         qs_layout = QVBoxLayout(self.quick_settings_frame)
+        qs_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         engine_row = QHBoxLayout()
         self.engine_quick_combo = QComboBox()
@@ -250,11 +267,20 @@ class WindowTranslator(QWidget):
         ai_page = QWidget()
         ai_layout = QVBoxLayout(ai_page)
         ai_layout.setContentsMargins(0, 4, 0, 0)
+
+        ai_layout.addWidget(QLabel("API Key:"))
+        key_row = QHBoxLayout()
         self.quick_api_key_input = QLineEdit()
         self.quick_api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.quick_api_key_input.setPlaceholderText("API Key (sk-...)")
+        self.quick_api_key_input.setPlaceholderText("sk-...")
         self.quick_api_key_input.setText(self._deepseek_api_key)
-        ai_layout.addWidget(self.quick_api_key_input)
+        self.quick_api_key_input.setToolTip("DeepSeek API Key，从 platform.deepseek.com 获取")
+        key_row.addWidget(self.quick_api_key_input, 1)
+        self.api_key_toggle_btn = QPushButton("显示")
+        self.api_key_toggle_btn.setCheckable(True)
+        self.api_key_toggle_btn.clicked.connect(self._toggle_api_key_visibility)
+        key_row.addWidget(self.api_key_toggle_btn)
+        ai_layout.addLayout(key_row)
 
         self.advanced_toggle_btn = QPushButton("高级设置 ▼")
         self.advanced_toggle_btn.setStyleSheet("text-align: left; font-weight: bold; padding: 2px;")
@@ -289,11 +315,14 @@ class WindowTranslator(QWidget):
         mt_layout.addWidget(self.google_checkbox)
         mt_layout.addStretch()
         self.quick_stack.addWidget(mt_page)
+        self.quick_stack.setCurrentIndex(self.engine_quick_combo.currentIndex())
 
         qs_layout.addWidget(self.quick_stack)
-        split_layout.addWidget(self.quick_settings_frame, 1)
 
-        tl.addLayout(split_layout)
+        right_wrapper.addWidget(self.quick_settings_frame)
+        self._split_layout.addLayout(right_wrapper, 1)
+
+        tl.addLayout(self._split_layout)
 
         self.tab_widget.addTab(self.translate_tab, "翻译")
 
@@ -436,24 +465,6 @@ class WindowTranslator(QWidget):
         ocr_lang_layout.addLayout(ocr_lang_row)
         sl.addWidget(self.ocr_lang_group)
 
-        self.deepseek_group = QGroupBox("DeepSeek API 设置")
-        ds_layout = QVBoxLayout(self.deepseek_group)
-        key_row = QHBoxLayout()
-        key_row.addWidget(QLabel("API Key:"))
-        self.api_key_input = QLineEdit()
-        self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.api_key_input.setPlaceholderText("sk-...")
-        self.api_key_input.setText(self._deepseek_api_key)
-        self.api_key_input.setToolTip("DeepSeek API Key，从 platform.deepseek.com 获取")
-        key_row.addWidget(self.api_key_input, 1)
-        self.api_key_toggle_btn = QPushButton("显示")
-        self.api_key_toggle_btn.setCheckable(True)
-        self.api_key_toggle_btn.clicked.connect(self._toggle_api_key_visibility)
-        key_row.addWidget(self.api_key_toggle_btn)
-        ds_layout.addLayout(key_row)
-        self.deepseek_group.setVisible(self._translate_engine == "deepseek")
-        sl.addWidget(self.deepseek_group)
-
         sl.addStretch()
         self.tab_widget.addTab(self.settings_tab, "设置")
 
@@ -476,7 +487,6 @@ class WindowTranslator(QWidget):
         self.api_slider.valueChanged.connect(self._on_api_parallel_changed)
         self.focus_guard_btn.clicked.connect(self._toggle_focus_guard)
         self.engine_combo.currentIndexChanged.connect(self._on_engine_changed)
-        self.api_key_input.textChanged.connect(self._on_api_key_changed)
 
         # -- quick settings --
         self.engine_quick_combo.currentIndexChanged.connect(self._on_quick_engine_changed)
@@ -486,6 +496,7 @@ class WindowTranslator(QWidget):
         self.base_url_input.textChanged.connect(lambda: self._mark_dirty())
         self.thinking_checkbox.toggled.connect(lambda: self._mark_dirty())
         self.google_checkbox.toggled.connect(lambda: self._mark_dirty())
+        self.collapse_toggle_btn.clicked.connect(self._on_collapse_toggle)
 
         for code, cb in self.ocr_lang_checkboxes.items():
             cb.toggled.connect(lambda checked, c=code: self._on_ocr_lang_changed(c, checked))
@@ -603,8 +614,10 @@ class WindowTranslator(QWidget):
             self._on_select_window()
 
     def _on_select_window(self) -> None:
-        self.showMinimized()
-        self.label.setText("请在目标窗口上点击一下...")
+        ctypes.windll.user32.SetWindowPos(
+            self._main_hwnd, -1, 0, 0, 0, 0, 0x0002 | 0x0001 | 0x0010)
+        self.label.setText("请在要选择窗口上点击")
+        self.label.setStyleSheet("color: #e67e22; font-size: 14px; font-weight: bold;")
         self.window_manager.start_window_selection(self._main_hwnd)
 
     def _on_select_region(self) -> None:
@@ -619,8 +632,10 @@ class WindowTranslator(QWidget):
         self.window_manager.start_region_selection()
 
     def _on_window_selected(self, title: str) -> None:
-        self.showNormal()
+        ctypes.windll.user32.SetWindowPos(
+            self._main_hwnd, 0, 0, 0, 0, 0, 0x0002 | 0x0001)
         self.label.setText(f"已选择窗口：{title[:30]}  默认全窗口翻译")
+        self.label.setStyleSheet("color: blue;")
         self.window_manager.hide_indicator()
         self.translation_engine.reset_last_text()
         self._reset_and_start()
@@ -637,7 +652,6 @@ class WindowTranslator(QWidget):
                 f"{region.width()}x{region.height()}"
             )
         self._reset_and_start()
-
     # ==================================================================
     #  Translation engine signal handlers (main thread)
     # ==================================================================
@@ -832,20 +846,15 @@ class WindowTranslator(QWidget):
 
     def _on_engine_changed(self, index: int) -> None:
         self._translate_engine = 'google' if index == 0 else 'deepseek'
-        self.deepseek_group.setVisible(self._translate_engine == 'deepseek')
         self.engine_quick_combo.blockSignals(True)
         self.engine_quick_combo.setCurrentIndex(1 if self._translate_engine == 'google' else 0)
         self.engine_quick_combo.blockSignals(False)
         self._clear_dirty()
         self._save_settings()
 
-    def _on_api_key_changed(self, text: str) -> None:
-        self._deepseek_api_key = text.strip()
-        self._save_settings()
-
     def _toggle_api_key_visibility(self) -> None:
         show = self.api_key_toggle_btn.isChecked()
-        self.api_key_input.setEchoMode(
+        self.quick_api_key_input.setEchoMode(
             QLineEdit.EchoMode.Normal if show else QLineEdit.EchoMode.Password
         )
         self.api_key_toggle_btn.setText("隐藏" if show else "显示")
@@ -871,6 +880,27 @@ class WindowTranslator(QWidget):
     # ==================================================================
     #  Quick settings handlers
     # ==================================================================
+
+    def _on_collapse_toggle(self) -> None:
+        self._config_expanded = not self._config_expanded
+        if self._config_expanded:
+            self.collapse_toggle_btn.setText("收起<---")
+            self.collapse_toggle_btn.setStyleSheet(
+                "QPushButton { text-align: left; padding: 1px 6px; "
+                "font-size: 11px; border: 1px solid #bbb; border-radius: 0px; "
+                "background-color: #ddd; color: #777; }"
+            )
+            self._split_layout.setStretch(0, 0)
+            self._split_layout.setStretch(1, 1)
+        else:
+            self.collapse_toggle_btn.setText("展开--->")
+            self.collapse_toggle_btn.setStyleSheet(
+                "QPushButton { text-align: left; padding: 1px 6px; "
+                "font-size: 11px; border: 1px solid #ccc; border-radius: 0px; "
+                "background-color: #e8e8e8; color: #888; }"
+            )
+            self._split_layout.setStretch(0, 1)
+            self._split_layout.setStretch(1, 1)
 
     def _mark_dirty(self) -> None:
         if self._quick_dirty:
@@ -907,10 +937,6 @@ class WindowTranslator(QWidget):
         self.engine_combo.blockSignals(True)
         self.engine_combo.setCurrentIndex(1 if new_engine == 'deepseek' else 0)
         self.engine_combo.blockSignals(False)
-        self.deepseek_group.setVisible(new_engine == 'deepseek')
-        self.api_key_input.blockSignals(True)
-        self.api_key_input.setText(new_api_key)
-        self.api_key_input.blockSignals(False)
 
         self._save_settings()
         self._clear_dirty()
@@ -932,9 +958,11 @@ class WindowTranslator(QWidget):
     # ==================================================================
 
     def _update_countdown(self) -> None:
-        if not self.running or not self.auto_translate_enabled:
+        if not self.running:
             self.status_label.setText("当前任务: 就绪")
             self.status_label.setStyleSheet("color: #5b7a9a; font-weight: bold;")
+            return
+        if not self.auto_translate_enabled:
             return
         if not self._should_translate():
             self.status_label.setText("当前任务: 等待获取焦点")
