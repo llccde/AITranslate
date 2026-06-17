@@ -16,32 +16,48 @@ from translation_task import TranslationTask
 from deepseek_translator import DeepSeekTranslator
 from utils import clean_text, is_target_language
 
-_easyocr_readers: list = []
+_paddleocr_readers: list = []
 
 
 def reset_readers() -> None:
-    global _easyocr_readers
-    _easyocr_readers = []
+    global _paddleocr_readers
+    _paddleocr_readers = []
+
+
+_PADDLEOCR_LANG_MAP: dict[str, str] = {
+    'en': 'en',
+    'ch_sim': 'ch',
+    'ch_tra': 'chinese_cht',
+    'ja': 'japan',
+    'ko': 'korean',
+}
+
+
+def _resolve_paddleocr_langs(lang_list: list[str]) -> list[str]:
+    paddle_langs: list[str] = []
+    for l in lang_list:
+        mapped = _PADDLEOCR_LANG_MAP.get(l, l)
+        paddle_langs.append(mapped)
+    if 'ch' in paddle_langs and 'en' in paddle_langs:
+        paddle_langs.remove('en')
+    result: list[str] = []
+    seen: set[str] = set()
+    for l in paddle_langs:
+        if l not in seen:
+            seen.add(l)
+            result.append(l)
+    if not result:
+        result.append('ch')
+    return result
 
 
 def _get_readers() -> list:
-    global _easyocr_readers
-    if not _easyocr_readers:
-        import easyocr
-        groups = _group_languages(OCR_LANG)
-        _easyocr_readers = [easyocr.Reader(group, gpu=False) for group in groups]
-    return _easyocr_readers
-
-
-def _group_languages(lang_list: list[str]) -> list[list[str]]:
-    non_en = sorted(set(l for l in lang_list if l != 'en'))
-    if not non_en:
-        return [['en']]
-    groups = []
-    for lang in non_en:
-        group = ['en', lang] if 'en' in lang_list else [lang]
-        groups.append(group)
-    return groups
+    global _paddleocr_readers
+    if not _paddleocr_readers:
+        from paddleocr import PaddleOCR
+        langs = _resolve_paddleocr_langs(OCR_LANG)
+        _paddleocr_readers = [PaddleOCR(lang=lang, use_angle_cls=True, use_gpu=False) for lang in langs]
+    return _paddleocr_readers
 
 
 def _lang_display(code: str) -> str:
@@ -289,8 +305,12 @@ class TranslationEngine(QObject):
             readers = _get_readers()
             all_results: list = []
             for reader in readers:
-                all_results.extend(reader.readtext(img_np))
-            lines = self._extract_lines_from_easyocr(all_results)
+                ocr_result = reader.ocr(img_np, cls=True)
+                if ocr_result and ocr_result[0]:
+                    for item in ocr_result[0]:
+                        bbox, (text, conf) = item
+                        all_results.append((bbox, text, conf))
+            lines = self._extract_lines_from_ocr(all_results)
             if not lines:
                 if generation == self._generation:
                     self.translation_ready.emit("")
@@ -399,7 +419,7 @@ class TranslationEngine(QObject):
                 self._execute(force=False)
 
     @staticmethod
-    def _extract_lines_from_easyocr(results: list) -> list[dict[str, Any]]:
+    def _extract_lines_from_ocr(results: list) -> list[dict[str, Any]]:
         regions: list[tuple] = []
         for bbox, text, conf in results:
             text = text.strip()

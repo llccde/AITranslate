@@ -1,4 +1,4 @@
-from typing import Any, Callable, Optional
+from typing import Any, Dict, Optional
 
 from PyQt6.QtCore import QObject, QTimer
 from PyQt6.QtGui import QCursor
@@ -17,6 +17,7 @@ class OverlayController(QObject):
     _region: Optional[QRect]
     _dpr: float
     _results: Optional[list[dict[str, Any]]]
+    _line_ids: Dict[int, int]
     _mouse_timer: QTimer
 
     def __init__(self) -> None:
@@ -26,6 +27,7 @@ class OverlayController(QObject):
         self._region = None
         self._dpr = 1.0
         self._results = None
+        self._line_ids = {}
 
         self._mouse_timer = QTimer(self)
         self._mouse_timer.timeout.connect(self._check_hover)
@@ -48,11 +50,24 @@ class OverlayController(QObject):
 
     def set_results(self, results: list[dict[str, Any]]) -> None:
         self._results = results
-        self._mgr.set_results(results)
+        self._line_ids = {}
+        self._mgr.clearall()
+
+        dpr = self._dpr
+        for i, line in enumerate(results):
+            rx = int(line['rel_x'] / dpr)
+            ry = int(line['rel_y'] / dpr)
+            rw = max(30, int(line['rel_w'] / dpr))
+            rh = max(16, int(line['rel_h'] / dpr))
+            fid = self._mgr.addLable(line.get('translated', '…'), (rx, ry, rw, rh))
+            self._line_ids[line.get('index', i)] = fid
+
         self.update_geometry()
 
     def set_line_text(self, index: int, text: str) -> None:
-        self._mgr.set_line_text(index, text)
+        fid = self._line_ids.get(index)
+        if fid is not None:
+            self._mgr.replace(fid, newText=text)
 
     # ---------- geometry ----------
 
@@ -73,7 +88,7 @@ class OverlayController(QObject):
                 cy = int(win_rect[1] / ratio)
                 cw = int((win_rect[2] - win_rect[0]) / ratio)
                 ch = int((win_rect[3] - win_rect[1]) / ratio)
-            self._mgr.update_geometry(cx, cy, cw, ch, self._hwnd, self._dpr)
+            self._mgr.update_geometry(cx, cy, cw, ch, self._hwnd)
         except Exception:
             import traceback
             traceback.print_exc()

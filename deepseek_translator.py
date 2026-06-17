@@ -8,8 +8,13 @@ from typing import Any, Callable, Optional, Tuple
 DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 DEEPSEEK_MODEL = "deepseek-chat"
 
-SYSTEM_PROMPT = """你现在是一个翻译助手。你需要翻译以下json文本中的每一个text字段。
-你必须严格按照以下格式输出翻译结果，用[index]和[!index]包裹每个文本块：
+SYSTEM_PROMPT = """你是一个翻译助手，专门处理从屏幕OCR识别出的文本
+
+## 核心任务
+翻译json文本中的每一个text字段,对于出错的文本进行推测。
+
+### 3. 格式要求
+严格按照以下格式输出翻译结果，用[index]和[!index]包裹每个文本块：
 
 [1]
 {
@@ -23,17 +28,27 @@ SYSTEM_PROMPT = """你现在是一个翻译助手。你需要翻译以下json文
 "text"="翻译后的文本"
 }
 [!2]
-
-不要添加任何额外的解释或说明，只输出上述格式的翻译结果。"""
+不确定的文本可以在guess字段中给出推测，但最终的text字段必须有翻译结果（可以是空字符串）。例如：
+不要添加任何额外的解释或说明，只输出上述格式的翻译结果。
+即使某条原文是乱码需要丢弃，也必须输出该条目（text可为空字符串）。"""
 
 
 def _build_example_pair(source_lang: str, target_lang: str) -> Tuple[list[dict[str, str]], str]:
-    """Generate a few-shot example tailored to the language pair."""
+    """Generate a few-shot example tailored to the language pair.
+    The examples now include 4 entries to demonstrate:
+    - Clear text (no guess)
+    - Recoverable garbled text (with guess)
+    - Pure noise (empty text, no guess)
+    - Clear text (no guess)
+    This encourages the model to output a guess field when it can recover the original text.
+    """
     examples: dict[Tuple[str, str], Tuple[list[dict[str, str]], str]] = {
         ('日语', '中文'): (
             [
                 {"id": "1", "text": "こんにちは、お元気ですか？"},
-                {"id": "2", "text": "私は元気です、ありがとう！"},
+                {"id": "2", "text": "今日は夭気がいいですね%%"},
+                {"id": "3", "text": "@@@###$$$"},
+                {"id": "4", "text": "ありがとうございます"},
             ],
             """[1]
 {
@@ -44,14 +59,29 @@ def _build_example_pair(source_lang: str, target_lang: str) -> Tuple[list[dict[s
 [2]
 {
 "id"="2",
-"text"="我很好，谢谢！"
+"guess"="今日は天気がいいですね",
+"text"="今天天气真好啊"
 }
-[!2]""",
+[!2]
+[3]
+{
+"id"="3",
+"text"=""
+}
+[!3]
+[4]
+{
+"id"="4",
+"text"="谢谢"
+}
+[!4]""",
         ),
         ('英语', '中文'): (
             [
                 {"id": "1", "text": "Hello, how are you?"},
-                {"id": "2", "text": "I am fine, thank you!"},
+                {"id": "2", "text": "Th1s is a t3st message%%%"},
+                {"id": "3", "text": "###@@@%%%&"},
+                {"id": "4", "text": "I am fine,thank you thank you thank you!"},
             ],
             """[1]
 {
@@ -62,14 +92,30 @@ def _build_example_pair(source_lang: str, target_lang: str) -> Tuple[list[dict[s
 [2]
 {
 "id"="2",
+"guess"="This is a test message",
+"text"="这是一条测试消息"
+}
+[!2]
+[3]
+{
+"id"="3",
+"text"=""
+}
+[!3]
+[4]
+{
+"id"="4",
+"guess" = "thank you 出现了三次，可能是强调或者重复输入,推测原文是: I am fine, thank you!",
 "text"="我很好，谢谢！"
 }
-[!2]""",
+[!4]""",
         ),
         ('中文', '英语'): (
             [
                 {"id": "1", "text": "你好，最近怎么样？"},
-                {"id": "2", "text": "我很好，谢谢关心！"},
+                {"id": "2", "text": "我己经完完成任努任务任务了%%"},
+                {"id": "3", "text": "锟斤拷烫烫烫###@@@%"},
+                {"id": "4", "text": "谢谢你的帮助"},
             ],
             """[1]
 {
@@ -80,14 +126,29 @@ def _build_example_pair(source_lang: str, target_lang: str) -> Tuple[list[dict[s
 [2]
 {
 "id"="2",
-"text"="I'm fine, thanks for asking!"
+"guess"="推测原始文本是:我已经完成任务了",
+"text"="I have completed the task"
 }
-[!2]""",
+[!2]
+[3]
+{
+"id"="3",
+"text"=""
+}
+[!3]
+[4]
+{
+"id"="4",
+"text"="Thank you for your help"
+}
+[!4]""",
         ),
         ('韩语', '中文'): (
             [
                 {"id": "1", "text": "안녕하세요, 잘 지내세요?"},
-                {"id": "2", "text": "네, 잘 지내요. 감사합니다!"},
+                {"id": "2", "text": "오늘 달씨가 좋네요%%"},
+                {"id": "3", "text": "#@!*&^%$word"},
+                {"id": "4", "text": "감사합니다"},
             ],
             """[1]
 {
@@ -98,9 +159,22 @@ def _build_example_pair(source_lang: str, target_lang: str) -> Tuple[list[dict[s
 [2]
 {
 "id"="2",
-"text"="是的，我过得很好，谢谢！"
+"guess"="오늘 날씨가 좋네요",
+"text"="今天天气真好"
 }
-[!2]""",
+[!2]
+[3]
+{
+"id"="3",
+"text"=""
+}
+[!3]
+[4]
+{
+"id"="4",
+"text"="谢谢"
+}
+[!4]""",
         ),
     }
     pair = examples.get((source_lang, target_lang))
@@ -146,7 +220,9 @@ class BlockParser:
 
 
 def _parse_block_content(content: str) -> str:
-    """Extract translated text from a block's inner JSON content."""
+    """Extract translated text from a block's inner JSON-like content.
+    Ignores optional 'guess' field and extracts only the final 'text' field.
+    """
     text_match = re.search(r'"text"\s*[=:]\s*"([^"]*)"', content)
     if text_match:
         return text_match.group(1)
@@ -185,7 +261,7 @@ class DeepSeekTranslator:
         data_items = [{"id": str(item['id']), "text": item['text']} for item in items]
         json_input = json.dumps({"data": data_items}, ensure_ascii=False, indent=4)
 
-        user_message = f"请翻译以下[{source_lang}]文本为[{target_lang}]：\n\n{json_input}"
+        user_message = f"请翻译以下文本为[{target_lang}]：\n\n{json_input}"
 
         example_data, example_response = _build_example_pair(source_lang, target_lang)
         example_json = json.dumps({"data": example_data}, ensure_ascii=False, indent=4)
@@ -270,6 +346,6 @@ class DeepSeekTranslator:
                 pass
             traceback.print_exc()
             raise RuntimeError(f"DeepSeek API HTTP {e.code}: {error_body}")
-        except Exception:
+        except Exception as e:
             traceback.print_exc()
-            raise
+            raise RuntimeError(f"DeepSeek API request failed: {str(e)}")

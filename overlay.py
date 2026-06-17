@@ -1,4 +1,4 @@
-from typing import Any, List, Optional
+from typing import Any, Dict, Optional, Tuple, Union
 
 from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout
 from PyQt6.QtCore import Qt, QRect, QRectF
@@ -11,6 +11,8 @@ from utils import is_window_foreground
 
 GWLP_HWNDPARENT = -8
 
+RectType = Union[QRect, QRectF, Tuple[int, int, int, int]]
+
 
 class TranslationOverlayManager:
     MODE_NONE: int = 0
@@ -22,9 +24,8 @@ class TranslationOverlayManager:
     STYLE_LIGHT: str = 'light'
 
     _window: QWidget
-    _frames: list['_LineFrame']
-    _labels: list[QLabel]
-    _results: Optional[list[dict[str, Any]]]
+    _items: Dict[int, Dict[str, Any]]
+    _next_id: int
     _mode: int
     _style: str
     _bg_opacity: int
@@ -41,9 +42,8 @@ class TranslationOverlayManager:
         self._window.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self._window.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
 
-        self._frames = []
-        self._labels = []
-        self._results = None
+        self._items = {}
+        self._next_id = 1
         self._mode = self.MODE_ALWAYS
         self._style = self.STYLE_DARK
         self._bg_opacity = 50
@@ -55,79 +55,132 @@ class TranslationOverlayManager:
     def widget(self) -> QWidget:
         return self._window
 
+    @property
+    def count(self) -> int:
+        return len(self._items)
+
     def set_style(self, style: str) -> None:
         self._style = style
-        for frame in self._frames:
-            frame._style = style
-            frame.update()
+        for item in self._items.values():
+            item['frame']._style = style
+            item['frame'].update()
         self._apply_label_styles()
 
     def set_bg_opacity(self, opacity: int) -> None:
         self._bg_opacity = max(0, min(100, opacity))
-        for frame in self._frames:
-            frame._opacity = self._bg_opacity
-            frame.update()
+        for item in self._items.values():
+            item['frame']._opacity = self._bg_opacity
+            item['frame'].update()
 
     def set_mode(self, mode: int) -> None:
         self._mode = mode
         if mode == self.MODE_NONE:
             self.hide_all()
 
-    def set_results(self, results: list[dict[str, Any]]) -> None:
-        self._results = results
-        self._target_focused = None
-        self._sync_frames(len(results))
+    # ---------- label CRUD ----------
 
-    def set_line_text(self, index: int, text: str) -> None:
-        if index < len(self._labels):
-            self._labels[index].setText(text)
-        if self._results and index < len(self._results):
-            self._results[index]['translated'] = text
+    def addLable(self, text: str, rect: RectType) -> int:
+        if isinstance(rect, (QRect, QRectF)):
+            rx, ry, rw, rh = rect.x(), rect.y(), rect.width(), rect.height()
+        else:
+            rx, ry, rw, rh = rect
+
+        rw = max(30, int(rw))
+        rh = max(16, int(rh))
+
+        fid = self._next_id
+        self._next_id += 1
+
+        frame = _LineFrame(self._window, self._style, self._bg_opacity)
+        label = QLabel(frame)
+        label.setWordWrap(True)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(4, 2, 4, 2)
+        layout.setSpacing(0)
+        layout.addWidget(label)
+
+        frame.setGeometry(int(rx), int(ry), rw, rh)
+        label.setText(text)
+        self._fit_font(label, text, rw, rh)
+
+        self._items[fid] = {
+            'frame': frame,
+            'label': label,
+            'text': text,
+            'rect': (int(rx), int(ry), rw, rh),
+        }
+
+        self._apply_label_styles()
+
+        return fid
+
+    def replace(self, fid: int, newText: Optional[str] = None,
+                newRect: Optional[RectType] = None) -> None:
+        if fid not in self._items:
+            return
+        item = self._items[fid]
+
+        if newText is not None:
+            item['text'] = newText
+            item['label'].setText(newText)
+
+        if newRect is not None:
+            if isinstance(newRect, (QRect, QRectF)):
+                rx, ry, rw, rh = newRect.x(), newRect.y(), newRect.width(), newRect.height()
+            else:
+                rx, ry, rw, rh = newRect
+            rw = max(30, int(rw))
+            rh = max(16, int(rh))
+            item['rect'] = (int(rx), int(ry), rw, rh)
+            item['frame'].setGeometry(int(rx), int(ry), rw, rh)
+
+        rx, ry, rw, rh = item['rect']
+        self._fit_font(item['label'], item['text'], rw, rh)
+
+    def delet(self, fid: int) -> None:
+        if fid not in self._items:
+            return
+        item = self._items.pop(fid)
+        item['frame'].hide()
+        item['frame'].deleteLater()
+
+    def clearall(self) -> None:
+        for item in self._items.values():
+            item['frame'].hide()
+            item['frame'].deleteLater()
+        self._items.clear()
+
+    # ---------- geometry / visibility ----------
 
     def update_geometry(self, x: int, y: int, w: int, h: int,
-                        target_hwnd: int, dpr: float) -> None:
-        if not self._results or self._mode == self.MODE_NONE:
+                        target_hwnd: int) -> None:
+        if not self._items or self._mode == self.MODE_NONE:
             self._window.hide()
             return
 
         self._window.setGeometry(x, y, w, h)
 
-        for i, line in enumerate(self._results):
-            if i >= len(self._frames):
-                break
-            frame = self._frames[i]
-            label = self._labels[i]
-
-            rx = int(line['rel_x'] / dpr)
-            ry = int(line['rel_y'] / dpr)
-            rw = max(30, int(line['rel_w'] / dpr))
-            rh = max(16, int(line['rel_h'] / dpr))
-
-            frame.setGeometry(rx, ry, rw, rh)
-            label.setText(line['translated'])
-            self._fit_font(label, line['translated'] or '', rw, rh)
-
         if self._mode == self.MODE_NONE:
             self._window.hide()
         elif self._mode == self.MODE_ALWAYS:
             self._window.show()
-            for f in self._frames:
-                f.show()
+            for item in self._items.values():
+                item['frame'].show()
             self._fix_z_order(target_hwnd)
         else:
             self._window.show()
             self._fix_z_order(target_hwnd)
 
     def update_hover(self, cursor_x: int, cursor_y: int) -> None:
-        if self._mode in (self.MODE_ALWAYS, self.MODE_NONE) or not self._results:
+        if self._mode in (self.MODE_ALWAYS, self.MODE_NONE) or not self._items:
             return
 
         win_x = self._window.x()
         win_y = self._window.y()
 
-        for i, frame in enumerate(self._frames):
-            if i >= len(self._results):
-                break
+        for item in self._items.values():
+            frame = item['frame']
             rx = win_x + frame.x()
             ry = win_y + frame.y()
             rw = frame.width()
@@ -143,8 +196,8 @@ class TranslationOverlayManager:
 
     def hide_all(self) -> None:
         self._window.hide()
-        for f in self._frames:
-            f.hide()
+        for item in self._items.values():
+            item['frame'].hide()
 
     def winId(self) -> int:
         return int(self._window.winId())
@@ -219,30 +272,13 @@ class TranslationOverlayManager:
         font.setPixelSize(best)
         label.setFont(font)
 
-    def _sync_frames(self, count: int) -> None:
-        while len(self._frames) > count:
-            self._frames.pop().deleteLater()
-            self._labels.pop()
-        while len(self._frames) < count:
-            frame = _LineFrame(self._window, self._style, self._bg_opacity)
-            label = QLabel(frame)
-            label.setWordWrap(True)
-            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            layout = QVBoxLayout(frame)
-            layout.setContentsMargins(4, 2, 4, 2)
-            layout.setSpacing(0)
-            layout.addWidget(label)
-            self._frames.append(frame)
-            self._labels.append(label)
-        self._apply_label_styles()
-
     def _apply_label_styles(self) -> None:
         if self._style == self.STYLE_DARK:
             ss = "color: rgba(255, 255, 255, 255); background: transparent;"
         else:
             ss = "color: rgba(0, 0, 0, 255); background: transparent;"
-        for label in self._labels:
-            label.setStyleSheet(ss)
+        for item in self._items.values():
+            item['label'].setStyleSheet(ss)
 
 
 class _LineFrame(QWidget):
@@ -255,7 +291,7 @@ class _LineFrame(QWidget):
         self._opacity = opacity
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
-    def paintEvent(self, a0: QPaintEvent) -> None: # type: ignore
+    def paintEvent(self, a0: QPaintEvent) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         alpha = int(self._opacity * 255 / 100)
